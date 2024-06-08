@@ -5,6 +5,7 @@ import { v4 as generateId } from 'uuid';
 import { Athena, AWSError, Credentials, SharedIniFileCredentials } from 'aws-sdk';
 import { PromiseResult } from 'aws-sdk/lib/request';
 import { GetQueryResultsInput, GetQueryResultsOutput } from 'aws-sdk/clients/athena';
+import { HttpsProxyAgent } from 'https-proxy-agent';
 
 export default class AthenaDriver extends AbstractDriver<Athena, Athena.Types.ClientConfiguration> implements IConnectionDriver {
 
@@ -47,6 +48,9 @@ export default class AthenaDriver extends AbstractDriver<Athena, Athena.Types.Cl
     this.connection = Promise.resolve(new Athena({
       credentials: credentials,
       region: this.credentials.region || 'us-east-1',
+      httpOptions: {
+        agent: this.credentials.httpsProxy ? new HttpsProxyAgent(this.credentials.httpsProxy) : undefined,
+      }
     }));
 
     return this.connection;
@@ -272,9 +276,12 @@ export default class AthenaDriver extends AbstractDriver<Athena, Athena.Types.Cl
         const tables = await this.rawQuery(`SHOW TABLES IN \`${parent.database}\``);
         const views = await this.rawQuery(`SHOW VIEWS IN "${parent.database}"`);
 
-        const viewsSet = new Set(views[0].ResultSet.Rows.map((row) => row.Data[0].VarCharValue));
+        const tablesResult = await this.getQueryResults(tables.QueryExecution.QueryExecutionId);
+        const viewsResult = await this.getQueryResults(views.QueryExecution.QueryExecutionId);
 
-        return tables[0].ResultSet.Rows
+        const viewsSet = new Set(viewsResult[0].ResultSet.Rows.map((row) => row.Data[0].VarCharValue));
+
+        return tablesResult[0].ResultSet.Rows
           .filter((row) => !viewsSet.has(row.Data[0].VarCharValue))
           .map((row) => ({
             database: parent.database,
@@ -285,8 +292,9 @@ export default class AthenaDriver extends AbstractDriver<Athena, Athena.Types.Cl
           }));
       case ContextValue.VIEW:
         const views2 = await this.rawQuery(`SHOW VIEWS IN "${parent.database}"`);
+        const viewsResult2 = await this.getQueryResults(views2.QueryExecution.QueryExecutionId);
         
-        return views2[0].ResultSet.Rows.map((row) => ({
+        return viewsResult2[0].ResultSet.Rows.map((row) => ({
           database: parent.database,
           label: row.Data[0].VarCharValue,
           type: item.childType,

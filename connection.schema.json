@@ -22,6 +22,10 @@
     "outputLocation": {
       "title": "S3 Output Location",
       "type": "string"
+    },
+    "httpsProxy": {
+      "title": "HTTPS Proxy",
+      "type": "string"
     }
   },
   "dependencies": {

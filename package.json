@@ -2,7 +2,7 @@
   "name": "sqltools-athena-driver",
   "displayName": "SQLTools AWS Athena Driver",
   "description": "SQLTools AWS Athena Driver",
-  "version": "0.3.4",
+  "version": "0.3.5",
   "publisher": "brunoventura",
   "license": "MIT",
   "icon": "icons/extension_icon.png",
@@ -51,13 +51,15 @@
     "@sqltools/base-driver": "^0.1.11",
     "@sqltools/types": "latest",
     "aws-sdk": "^2.869.0",
+    "https-proxy-agent": "^7.0.4",
+    "proxy-agent": "^6.4.0",
     "uuid": "^7.0.3"
   },
   "devDependencies": {
     "@babel/preset-env": "^7.5.5",
     "@types/node": "18.x",
     "@types/vscode": "^1.42.0",
-    "typescript": "^3.7.3"
+    "typescript": "^5.4.5"
   },
   "extensionDependencies": [
     "mtxr.sqltools"
