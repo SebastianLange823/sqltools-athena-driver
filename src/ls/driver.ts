@@ -4,7 +4,7 @@ import queries from './queries';
 import { v4 as generateId } from 'uuid';
 import { Athena, AWSError, Credentials, SharedIniFileCredentials } from 'aws-sdk';
 import { PromiseResult } from 'aws-sdk/lib/request';
-import { GetQueryResultsInput, GetQueryResultsOutput } from 'aws-sdk/clients/athena';
+import { GetQueryResultsInput, GetQueryResultsOutput, TableMetadata } from 'aws-sdk/clients/athena';
 
 export default class AthenaDriver extends AbstractDriver<Athena, Athena.Types.ClientConfiguration> implements IConnectionDriver {
 
@@ -194,32 +194,42 @@ export default class AthenaDriver extends AbstractDriver<Athena, Athena.Types.Cl
           { label: 'Views', type: ContextValue.RESOURCE_GROUP, iconId: 'folder', childType: ContextValue.VIEW },
         ];
       case ContextValue.TABLE:
+        return this.getColumns(db, item, parent);
       case ContextValue.VIEW:
-        const tableMetadata = await db.getTableMetadata({
-          CatalogName: item.schema,
-          DatabaseName: item.database,
-          TableName: item.label
-        }).promise();
-
-        return [
-          ...tableMetadata.TableMetadata.Columns,
-          ...tableMetadata.TableMetadata.PartitionKeys,
-        ].map(column => ({
-          label: column.Name,
-          type: ContextValue.COLUMN,
-          dataType: column.Type,
-          schema: item.schema,
-          database: item.database,
-          childType: ContextValue.NO_CHILD,
-          isNullable: true,
-          iconName: 'column',
-          table: parent,
-        }));
+        return this.getColumns(db, item, parent);
       case ContextValue.RESOURCE_GROUP:
         return this.getChildrenForGroup({ item, parent });
     }
     
     return [];
+  }
+
+  /**
+   * Retrieves the columns for a given table or view item from Athena.
+   * 
+   * @param db - The Athena client instance.
+   * @param item - The searchable item representing the table or view.
+   * @param parent - The parent item in the explorer tree.
+   * @returns A promise that resolves to an array of column metadata objects.
+   */
+  private async getColumns(db: Athena, item: NSDatabase.SearchableItem, parent: NSDatabase.SearchableItem): Promise<any> {
+    const tableMetadata = await db.getTableMetadata({
+      CatalogName: item.schema,
+      DatabaseName: item.database,
+      TableName: item.label
+    }).promise();
+
+    return tableMetadata.TableMetadata.Columns.map((column) => ({
+      database: item.database,
+      label: column.Name,
+      type: ContextValue.COLUMN,
+      dataType: column.Type,
+      schema: item.schema,
+      childType: ContextValue.NO_CHILD,
+      isNullable: false,
+      iconName: 'column',
+      table: parent,
+    }));
   }
 
   /**
@@ -269,13 +279,10 @@ export default class AthenaDriver extends AbstractDriver<Athena, Athena.Types.Cl
         }
         return databaseList;
       case ContextValue.TABLE:
-        const tables = await this.rawQuery(`SHOW TABLES IN \`${parent.database}\``);
-        const views = await this.rawQuery(`SHOW VIEWS IN "${parent.database}"`);
-
-        const viewsSet = new Set(views[0].ResultSet.Rows.map((row) => row.Data[0].VarCharValue));
+        const tablesExecution = await this.rawQuery(`SHOW TABLES IN \`${parent.database}\``);
+        const tables = await this.getQueryResults(tablesExecution.QueryExecution?.QueryExecutionId || '');
 
         return tables[0].ResultSet.Rows
-          .filter((row) => !viewsSet.has(row.Data[0].VarCharValue))
           .map((row) => ({
             database: parent.database,
             label: row.Data[0].VarCharValue,
@@ -284,15 +291,17 @@ export default class AthenaDriver extends AbstractDriver<Athena, Athena.Types.Cl
             childType: ContextValue.COLUMN,
           }));
       case ContextValue.VIEW:
-        const views2 = await this.rawQuery(`SHOW VIEWS IN "${parent.database}"`);
-        
-        return views2[0].ResultSet.Rows.map((row) => ({
-          database: parent.database,
-          label: row.Data[0].VarCharValue,
-          type: item.childType,
-          schema: parent.schema,
-          childType: ContextValue.COLUMN,
-        }));
+        const viewsExecution = await this.rawQuery(`SHOW VIEWS IN "${parent.database}"`);
+        const views = await this.getQueryResults(viewsExecution.QueryExecution?.QueryExecutionId || '');
+
+        return views[0].ResultSet.Rows
+          .map((row) => ({
+            database: parent.database,
+            label: row.Data[0].VarCharValue,
+            type: item.childType,
+            schema: parent.schema,
+            childType: ContextValue.COLUMN,
+          }));
     }
     return [];
   }
