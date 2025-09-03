@@ -6,10 +6,16 @@ import { Athena, AWSError, Credentials, SharedIniFileCredentials } from 'aws-sdk
 import { PromiseResult } from 'aws-sdk/lib/request';
 import { GetQueryResultsInput, GetQueryResultsOutput } from 'aws-sdk/clients/athena';
 import { HttpsProxyAgent } from 'https-proxy-agent';
+import { DriverObjectCache } from './cache';
+import { ColumnItem, DatabaseItem, TableViewItem } from './types';
+
 
 export default class AthenaDriver extends AbstractDriver<Athena, Athena.Types.ClientConfiguration> implements IConnectionDriver {
 
-  queries = queries
+  queries = queries;
+
+  private readonly schema = 'AwsDataCatalog';
+  private readonly cache = new DriverObjectCache();
 
   /**
    * If you driver depends on node packages, list it below on `deps` prop.
@@ -28,8 +34,6 @@ export default class AthenaDriver extends AbstractDriver<Athena, Athena.Types.Cl
   // private get lib() {
   //   return this.requireDep('node-packge-name') as DriverLib;
   // }
-  
-
 
   public async open() {
     if (this.connection) {
@@ -53,18 +57,21 @@ export default class AthenaDriver extends AbstractDriver<Athena, Athena.Types.Cl
       }
     }));
 
+    this.getDatabases(await this.connection, this.schema);
+    this.getTables("default", this.schema);
+
     return this.connection;
   }
-    private formatBytes = (bytes: number, decimals: number = 2) => {
-      if (!+bytes) return '0 Bytes'
+  private formatBytes = (bytes: number, decimals: number = 2) => {
+    if (!+bytes) return '0 Bytes'
 
-      const k = 1024
-      const dm = decimals < 0 ? 0 : decimals
-      const sizes = ['Bytes', 'KiB', 'MiB', 'GiB', 'TiB', 'PiB', 'EiB', 'ZiB', 'YiB']
+    const k = 1024
+    const dm = decimals < 0 ? 0 : decimals
+    const sizes = ['Bytes', 'KiB', 'MiB', 'GiB', 'TiB', 'PiB', 'EiB', 'ZiB', 'YiB']
 
-      const i = Math.floor(Math.log(bytes) / Math.log(k))
+    const i = Math.floor(Math.log(bytes) / Math.log(k))
 
-      return `${parseFloat((bytes / Math.pow(k, i)).toFixed(dm))} ${sizes[i]}`
+    return `${parseFloat((bytes / Math.pow(k, i)).toFixed(dm))} ${sizes[i]}`
   }
 
   public async close() { }
@@ -87,16 +94,16 @@ export default class AthenaDriver extends AbstractDriver<Athena, Athena.Types.Cl
     let queryCheckExecution;
 
     do {
-        queryCheckExecution = await db.getQueryExecution({ 
-            QueryExecutionId: queryExecution.QueryExecutionId,
-        }).promise();
-        
-        console.log(
-            `Query ${queryExecution.QueryExecutionId} ` +
-            `is ${queryCheckExecution.QueryExecution.Status.State} ` +
-            `${queryCheckExecution.QueryExecution.Statistics?.TotalExecutionTimeInMillis} ms elapsed. ` +
-            `${this.formatBytes(queryCheckExecution.QueryExecution.Statistics?.DataScannedInBytes)} scanned`
-        );
+      queryCheckExecution = await db.getQueryExecution({
+        QueryExecutionId: queryExecution.QueryExecutionId,
+      }).promise();
+
+      console.log(
+        `Query ${queryExecution.QueryExecutionId} ` +
+        `is ${queryCheckExecution.QueryExecution.Status.State} ` +
+        `${queryCheckExecution.QueryExecution.Statistics?.TotalExecutionTimeInMillis} ms elapsed. ` +
+        `${this.formatBytes(queryCheckExecution.QueryExecution.Statistics?.DataScannedInBytes)} scanned`
+      );
 
       await this.sleep(200);
     } while (!endStatus.has(queryCheckExecution.QueryExecution.Status.State))
@@ -155,9 +162,11 @@ export default class AthenaDriver extends AbstractDriver<Athena, Athena.Types.Cl
     const response: NSDatabase.IResult[] = [{
       cols: columns,
       connId: this.getId(),
-      messages: [{ date: new Date(), message: `Query "${queryExecution.QueryExecution?.QueryExecutionId}" ` +
-      `ok with ${resultSet.length} results. ` +
-      `${this.formatBytes(queryExecution?.QueryExecution?.Statistics?.DataScannedInBytes||0)} scanned`}],
+      messages: [{
+        date: new Date(), message: `Query "${queryExecution.QueryExecution?.QueryExecutionId}" ` +
+          `ok with ${resultSet.length} results. ` +
+          `${this.formatBytes(queryExecution?.QueryExecution?.Statistics?.DataScannedInBytes || 0)} scanned`
+      }],
       results: resultSet,
       query: queries.toString(),
       requestId: opt.requestId,
@@ -198,42 +207,14 @@ export default class AthenaDriver extends AbstractDriver<Athena, Athena.Types.Cl
           { label: 'Views', type: ContextValue.RESOURCE_GROUP, iconId: 'folder', childType: ContextValue.VIEW },
         ];
       case ContextValue.TABLE:
-        return this.getColumns(db, item, parent);
+        return this.getColumns(db, item.label, item.database, item.schema, parent);
       case ContextValue.VIEW:
-        return this.getColumns(db, item, parent);
+        return this.getColumns(db, item.label, item.database, item.schema, parent);
       case ContextValue.RESOURCE_GROUP:
         return this.getChildrenForGroup({ item, parent });
     }
-    
+
     return [];
-  }
-
-  /**
-   * Retrieves the columns for a given table or view item from Athena.
-   * 
-   * @param db - The Athena client instance.
-   * @param item - The searchable item representing the table or view.
-   * @param parent - The parent item in the explorer tree.
-   * @returns A promise that resolves to an array of column metadata objects.
-   */
-  private async getColumns(db: Athena, item: NSDatabase.SearchableItem, parent: NSDatabase.SearchableItem): Promise<any> {
-    const tableMetadata = await db.getTableMetadata({
-      CatalogName: item.schema,
-      DatabaseName: item.database,
-      TableName: item.label
-    }).promise();
-
-    return tableMetadata.TableMetadata.Columns.map((column) => ({
-      database: item.database,
-      label: column.Name,
-      type: ContextValue.COLUMN,
-      dataType: column.Type,
-      schema: item.schema,
-      childType: ContextValue.NO_CHILD,
-      isNullable: false,
-      iconName: 'column',
-      table: parent,
-    }));
   }
 
   /**
@@ -242,7 +223,7 @@ export default class AthenaDriver extends AbstractDriver<Athena, Athena.Types.Cl
    */
   private async getChildrenForGroup({ parent, item }: Arg0<IConnectionDriver['getChildrenForItem']>) {
     const db = await this.connection;
-    
+
     switch (item.childType) {
       case ContextValue.SCHEMA:
         const catalogs = await db.listDataCatalogs().promise();
@@ -255,57 +236,12 @@ export default class AthenaDriver extends AbstractDriver<Athena, Athena.Types.Cl
           childType: ContextValue.DATABASE,
         }));
       case ContextValue.DATABASE:
-        let databaseList = [];          
-        let firstBatch:boolean = true;
-        let nextToken:string|null = null;
-        
-        while (firstBatch == true || nextToken !== null) {
-          firstBatch = false;
-          let listDbRequest = {
-            CatalogName: parent.schema,
-          }
-          if (nextToken !== null) {
-            Object.assign(listDbRequest, {
-              NextToken: nextToken,
-            });
-          }
-          const catalog = await db.listDatabases(listDbRequest).promise();
-          nextToken = 'NextToken' in catalog ? catalog.NextToken : null;
-
-          databaseList = databaseList.concat(
-            catalog.DatabaseList.map((database) => ({
-              database: database.Name,
-              label: database.Name,
-              type: item.childType,
-              schema: parent.schema,
-              childType: ContextValue.TABLE,
-            })));
-        }
-        return databaseList;
+        return await this.getDatabases(db, parent.schema);
       case ContextValue.TABLE:
-        const tablesExecution = await this.rawQuery(`SHOW TABLES IN \`${parent.database}\``);
-        const tables = await this.getQueryResults(tablesExecution.QueryExecution?.QueryExecutionId || '');
-
-        return tables[0].ResultSet.Rows
-          .map((row) => ({
-            database: parent.database,
-            label: row.Data[0].VarCharValue,
-            type: item.childType,
-            schema: parent.schema,
-            childType: ContextValue.COLUMN,
-          }));
+        return await this.getTables(parent.database, parent.schema);
       case ContextValue.VIEW:
-        const viewsExecution = await this.rawQuery(`SHOW VIEWS IN "${parent.database}"`);
-        const views = await this.getQueryResults(viewsExecution.QueryExecution?.QueryExecutionId || '');
-
-        return views[0].ResultSet.Rows
-          .map((row) => ({
-            database: parent.database,
-            label: row.Data[0].VarCharValue,
-            type: item.childType,
-            schema: parent.schema,
-            childType: ContextValue.COLUMN,
-          }));
+        console.log('views')
+        return await this.getViews(parent.database, parent.schema);
     }
     return [];
   }
@@ -313,91 +249,237 @@ export default class AthenaDriver extends AbstractDriver<Athena, Athena.Types.Cl
   /**
    * This method is a helper for intellisense and quick picks.
    */
-  public async searchItems(itemType: ContextValue, search: string, _extraParams: any = {}): Promise<NSDatabase.SearchableItem[]> {
+  public async searchItems(itemType: ContextValue, search: any, _extraParams: any = {}): Promise<NSDatabase.SearchableItem[]> {
     switch (itemType) {
-      case ContextValue.TABLE:
-      case ContextValue.VIEW:
-        let j = 0;
-        return [{
-          database: 'fakedb',
-          label: `${search || 'table'}${j++}`,
-          type: itemType,
-          schema: 'fakeschema',
-          childType: ContextValue.COLUMN,
-        },{
-          database: 'fakedb',
-          label: `${search || 'table'}${j++}`,
-          type: itemType,
-          schema: 'fakeschema',
-          childType: ContextValue.COLUMN,
-        },
+      case ContextValue.DATABASE:
         {
-          database: 'fakedb',
-          label: `${search || 'table'}${j++}`,
-          type: itemType,
-          schema: 'fakeschema',
-          childType: ContextValue.COLUMN,
-        }]
-      case ContextValue.COLUMN:
-        let i = 0;
-        return [
-          {
-            database: 'fakedb',
-            label: `${search || 'porra'}${i++}`,
-            type: ContextValue.COLUMN,
-            dataType: 'faketype',
-            schema: 'fakeschema',
-            childType: ContextValue.NO_CHILD,
-            isNullable: false,
-            iconName: 'column',
-            table: 'fakeTable'
-          },{
-            database: 'fakedb',
-            label: `${search || 'column'}${i++}`,
-            type: ContextValue.COLUMN,
-            dataType: 'faketype',
-            schema: 'fakeschema',
-            childType: ContextValue.NO_CHILD,
-            isNullable: false,
-            iconName: 'column',
-            table: 'fakeTable'
-          },{
-            database: 'fakedb',
-            label: `${search || 'column'}${i++}`,
-            type: ContextValue.COLUMN,
-            dataType: 'faketype',
-            schema: 'fakeschema',
-            childType: ContextValue.NO_CHILD,
-            isNullable: false,
-            iconName: 'column',
-            table: 'fakeTable'
-          },{
-            database: 'fakedb',
-            label: `${search || 'column'}${i++}`,
-            type: ContextValue.COLUMN,
-            dataType: 'faketype',
-            schema: 'fakeschema',
-            childType: ContextValue.NO_CHILD,
-            isNullable: false,
-            iconName: 'column',
-            table: 'fakeTable'
-          },{
-            database: 'fakedb',
-            label: `${search || 'column'}${i++}`,
-            type: ContextValue.COLUMN,
-            dataType: 'faketype',
-            schema: 'fakeschema',
-            childType: ContextValue.NO_CHILD,
-            isNullable: false,
-            iconName: 'column',
-            table: 'fakeTable'
+          const cached = this.cache.getDatabases();
+          const databases = cached || await this.getDatabases(await this.connection, this.schema);
+          return databases.map(item => {
+            return {
+              database: item.database,
+              label: item.label,
+              type: ContextValue.DATABASE,
+              schema: this.schema,
+              childType: ContextValue.TABLE,
+            }
+          });
+        }
+      case ContextValue.TABLE:
+        {
+          let filter: string;
+
+          if (
+            _extraParams &&
+            typeof _extraParams === 'object' &&
+            Object.prototype.hasOwnProperty.call(_extraParams, 'database')
+          ) {
+            filter = _extraParams.database;
           }
-        ];
+
+          let tables = this.cache.getTables(filter);
+
+          if (!tables) {
+            tables = await this.getTables(filter, this.schema);
+          }
+
+          return tables.map(item => {
+            return {
+              database: item.database,
+              label: item.label,
+              type: ContextValue.TABLE,
+              schema: this.schema,
+              childType: ContextValue.COLUMN,
+            }
+          });
+        }
+      case ContextValue.VIEW:
+        {
+          let filter: string;
+
+          if (
+            _extraParams &&
+            typeof _extraParams === 'object' &&
+            Object.prototype.hasOwnProperty.call(_extraParams, 'database')
+          ) {
+            filter = _extraParams.database;
+          }
+
+          let tables = this.cache.getViews(filter);
+
+          if (!tables) {
+            tables = await this.getTables(filter, this.schema);
+          }
+
+          return tables.map(item => {
+            return {
+              database: item.database,
+              label: item.label,
+              type: ContextValue.TABLE,
+              schema: this.schema,
+              childType: ContextValue.COLUMN,
+            }
+          });
+        }
+      case ContextValue.COLUMN:
+        {
+          if (
+            !_extraParams &&
+            !(typeof _extraParams === 'object') &&
+            !Object.prototype.hasOwnProperty.call(_extraParams, 'tables')
+          ) {
+            return [];
+          }
+
+          if (_extraParams.tables.length > 1) {
+            return [];
+          }
+
+          const databaseFilter = _extraParams.tables[0].database;
+          const tableFilter = _extraParams.tables[0].label;
+
+          let columns = this.cache.getColumns(databaseFilter, tableFilter);
+
+          if (!columns && databaseFilter && tableFilter) {
+            const item = {
+              database: databaseFilter,
+              label: tableFilter,
+              type: ContextValue.TABLE,
+              schema: this.schema,
+              childType: ContextValue.COLUMN,
+            } as NSDatabase.SearchableItem;
+            const db = await this.connection;
+            columns = await this.getColumns(db, tableFilter, databaseFilter, this.schema, item);
+          }
+
+          return columns.map(item => {
+            return {
+              database: item.database,
+              label: item.label,
+              type: ContextValue.COLUMN,
+              dataType: item.dataType,
+              isNullable: false,
+              iconName: 'column',
+              table: item.table,
+              schema: this.schema,
+              childType: ContextValue.NO_CHILD,
+            }
+          });
+        }
     }
     return [];
   }
 
   public getStaticCompletions: IConnectionDriver['getStaticCompletions'] = async () => {
     return {};
+  }
+
+  /**
+  * Retrieves the columns for a given table or view item from Athena.
+  */
+  private async getColumns(db: Athena, table: string, database: string, schema: string, parent: NSDatabase.SearchableItem): Promise<ColumnItem[]> {
+    const tableMetadata = await db.getTableMetadata({
+      CatalogName: schema,
+      DatabaseName: database,
+      TableName: table
+    }).promise();
+
+    return tableMetadata.TableMetadata.Columns.map((column) => {
+      const columnItem: ColumnItem = {
+        database: database,
+        label: column.Name,
+        type: ContextValue.COLUMN,
+        dataType: column.Type,
+        schema: schema,
+        childType: ContextValue.NO_CHILD,
+        isNullable: false,
+        iconName: 'column',
+        table: parent,
+      };
+      this.cache.add(columnItem)
+      return columnItem;
+    });
+  }
+
+  private async getTables(database: string, schema: string): Promise<TableViewItem[]> {
+    const tablesExecution = await this.rawQuery(`SHOW TABLES IN \`${database}\``);
+    const tablesResult = await this.getQueryResults(tablesExecution.QueryExecution?.QueryExecutionId || '');
+
+    const views = await this.getViews(database, schema);
+    const tables = tablesResult[0].ResultSet.Rows
+      .map((row) => {
+        const tableItem: TableViewItem = {
+          database: database,
+          label: row.Data[0].VarCharValue,
+          type: ContextValue.TABLE,
+          schema: schema,
+          childType: ContextValue.COLUMN,
+        };
+        this.cache.add(tableItem);
+        return tableItem;
+      })
+      .filter(tableItem => {
+        // Remove from tables any object that is also in views (same database, label, schema)
+        return !views.some(viewItem =>
+          viewItem.database === tableItem.database &&
+          viewItem.label === tableItem.label &&
+          viewItem.schema === tableItem.schema
+        );
+      });
+
+    return tables;
+  }
+
+  private async getViews(database: string, schema: string): Promise<TableViewItem[]> {
+    const viewsExecution = await this.rawQuery(`SHOW VIEWS IN ${database}`);
+    const viewsResult = await this.getQueryResults(viewsExecution.QueryExecution?.QueryExecutionId || '');
+
+    return viewsResult[0].ResultSet.Rows
+      .map((row) => {
+        const viewItem: TableViewItem = {
+          database: database,
+          label: row.Data[0].VarCharValue,
+          type: ContextValue.VIEW,
+          schema: schema,
+          childType: ContextValue.COLUMN,
+        };
+        this.cache.add(viewItem);
+        return viewItem;
+      });
+  }
+
+  private async getDatabases(db: Athena, schema: string): Promise<DatabaseItem[]> {
+    let firstBatch: boolean = true;
+    let nextToken: string | null = null;
+    const items: Omit<DatabaseItem, 'childType'>[] = [];
+
+    while (firstBatch == true || nextToken !== null) {
+      firstBatch = false;
+      let listDbRequest: any = {
+        CatalogName: schema,
+      }
+      if (nextToken !== null) {
+        Object.assign(listDbRequest, {
+          NextToken: nextToken,
+        });
+      }
+      const catalog = await db.listDatabases(listDbRequest).promise();
+      nextToken = 'NextToken' in catalog ? catalog.NextToken : null;
+
+      items.push(
+        ...catalog.DatabaseList.map((database) => {
+          const item: Omit<DatabaseItem, 'childType'> = {
+            database: database.Name,
+            label: database.Name,
+            type: ContextValue.DATABASE,
+            schema: schema,
+          };
+          this.cache.add(item as DatabaseItem);
+          return item;
+        })
+      );
+    }
+
+    return items;
   }
 }
