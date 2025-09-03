@@ -330,47 +330,46 @@ export default class AthenaDriver extends AbstractDriver<Athena, Athena.Types.Cl
       case ContextValue.COLUMN:
         {
           if (
-            !_extraParams &&
-            !(typeof _extraParams === 'object') &&
-            !Object.prototype.hasOwnProperty.call(_extraParams, 'tables')
+            !_extraParams ||
+            typeof _extraParams !== 'object' ||
+            !Array.isArray(_extraParams.tables) ||
+            _extraParams.tables.length === 0
           ) {
             return [];
           }
 
-          if (_extraParams.tables.length > 1) {
-            return [];
-          }
+          const columnsArrays = await Promise.all(
+            _extraParams.tables.map(async (table) => {
+              let columns = this.cache.getColumns(table.database, table.label);
 
-          const databaseFilter = _extraParams.tables[0].database;
-          const tableFilter = _extraParams.tables[0].label;
+              if (!columns) {
+                const parentItem: NSDatabase.SearchableItem = {
+                  database: table.database,
+                  label: table.label,
+                  type: ContextValue.TABLE,
+                  schema: this.schema,
+                  childType: ContextValue.COLUMN,
+                };
+                const db = await this.connection;
+                columns = await this.getColumns(db, table.label, table.database, this.schema, parentItem);
+              }
 
-          let columns = this.cache.getColumns(databaseFilter, tableFilter);
+              return columns || [];
+            })
+          );
 
-          if (!columns && databaseFilter && tableFilter) {
-            const item = {
-              database: databaseFilter,
-              label: tableFilter,
-              type: ContextValue.TABLE,
-              schema: this.schema,
-              childType: ContextValue.COLUMN,
-            } as NSDatabase.SearchableItem;
-            const db = await this.connection;
-            columns = await this.getColumns(db, tableFilter, databaseFilter, this.schema, item);
-          }
+          const columns: ColumnItem[] = columnsArrays.flat();
 
-          return columns.map(item => {
-            return {
-              database: item.database,
-              label: item.label,
-              type: ContextValue.COLUMN,
-              dataType: item.dataType,
-              isNullable: false,
-              iconName: 'column',
-              table: item.table,
-              schema: this.schema,
-              childType: ContextValue.NO_CHILD,
-            }
-          });
+          return columns.map(item => ({
+            database: item.database,
+            label: item.label,
+            type: ContextValue.COLUMN,
+            dataType: item.dataType,
+            isNullable: false,
+            table: item.table,
+            schema: this.schema,
+            childType: ContextValue.NO_CHILD,
+          }));
         }
     }
     return [];
