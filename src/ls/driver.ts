@@ -57,8 +57,10 @@ export default class AthenaDriver extends AbstractDriver<Athena, Athena.Types.Cl
       }
     }));
 
-    this.getDatabases(await this.connection, this.schema);
-    this.getTables("default", this.schema);
+    await Promise.all([
+      this.getDatabases(await this.connection, this.schema),
+      this.getTables("default", this.schema)
+    ]);
 
     return this.connection;
   }
@@ -74,7 +76,11 @@ export default class AthenaDriver extends AbstractDriver<Athena, Athena.Types.Cl
     return `${parseFloat((bytes / Math.pow(k, i)).toFixed(dm))} ${sizes[i]}`
   }
 
-  public async close() { }
+  public async close() {
+    if (this.connection) {
+      this.connection = null;
+    }
+  }
 
   private sleep = (time: number) => new Promise((resolve) => setTimeout(() => resolve(true), time));
 
@@ -315,7 +321,7 @@ export default class AthenaDriver extends AbstractDriver<Athena, Athena.Types.Cl
             return {
               database: item.database,
               label: item.label,
-              type: ContextValue.TABLE,
+              type: ContextValue.VIEW,
               schema: this.schema,
               childType: ContextValue.COLUMN,
             }
