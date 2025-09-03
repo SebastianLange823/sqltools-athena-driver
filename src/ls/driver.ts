@@ -4,7 +4,8 @@ import queries from './queries';
 import { v4 as generateId } from 'uuid';
 import { Athena, AWSError, Credentials, SharedIniFileCredentials } from 'aws-sdk';
 import { PromiseResult } from 'aws-sdk/lib/request';
-import { GetQueryResultsInput, GetQueryResultsOutput, TableMetadata } from 'aws-sdk/clients/athena';
+import { GetQueryResultsInput, GetQueryResultsOutput } from 'aws-sdk/clients/athena';
+import { HttpsProxyAgent } from 'https-proxy-agent';
 
 export default class AthenaDriver extends AbstractDriver<Athena, Athena.Types.ClientConfiguration> implements IConnectionDriver {
 
@@ -47,6 +48,9 @@ export default class AthenaDriver extends AbstractDriver<Athena, Athena.Types.Cl
     this.connection = Promise.resolve(new Athena({
       credentials: credentials,
       region: this.credentials.region || 'us-east-1',
+      httpOptions: {
+        agent: this.credentials.httpsProxy ? new HttpsProxyAgent(this.credentials.httpsProxy) : undefined,
+      }
     }));
 
     return this.connection;
