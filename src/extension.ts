@@ -1,11 +1,9 @@
 import * as vscode from 'vscode';
 import { IExtension, IExtensionPlugin, IDriverExtensionApi } from '@sqltools/types';
 import { ExtensionContext } from 'vscode';
+import { DriverObjectCache } from './ls/cache';
 import { DRIVER_ALIASES } from './constants';
 const { publisher, name } = require('../package.json');
-// import { workspace } from 'vscode';
-// import { Uri } from 'vscode';
-// import path from 'path';
 
 const driverName = 'driver.athena';
 
@@ -39,6 +37,13 @@ export async function activate(extContext: ExtensionContext): Promise<IDriverExt
     }
   };
   api.registerPlugin(plugin);
+
+  extContext.subscriptions.push(
+    vscode.commands.registerCommand('sqltools-athena-driver.clearCache', () => {
+      DriverObjectCache.getInstance().clear();
+    })
+  );
+
   return {
     driverName,
     parseBeforeSaveConnection: ({ connInfo }) => {
@@ -78,4 +83,4 @@ export async function activate(extContext: ExtensionContext): Promise<IDriverExt
   }
 }
 
-export function deactivate() {}
+export function deactivate() { }

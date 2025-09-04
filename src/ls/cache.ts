@@ -2,7 +2,17 @@ import { ContextValue } from '@sqltools/types';
 import { ColumnItem, DatabaseItem, TableViewItem } from './types';
 
 export class DriverObjectCache {
-  private readonly cache: Array<DatabaseItem | TableViewItem | ColumnItem> = [];
+  private static instance: DriverObjectCache;
+  private cache: Array<DatabaseItem | TableViewItem | ColumnItem> = [];
+
+  private constructor() {}
+
+  public static getInstance(): DriverObjectCache {
+    if (!DriverObjectCache.instance) {
+      DriverObjectCache.instance = new DriverObjectCache();
+    }
+    return DriverObjectCache.instance;
+  }
 
   public add(item: DatabaseItem | TableViewItem | ColumnItem): void {
     const existing = this.get({
@@ -23,6 +33,10 @@ export class DriverObjectCache {
       cached.label === match.label &&
       cached.type === match.type
     );
+  }
+
+  public clear(): void {
+    this.cache = [];
   }
 
   public getColumns(database: any, table: any): ColumnItem[] | undefined {

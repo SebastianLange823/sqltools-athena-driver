@@ -15,7 +15,7 @@ export default class AthenaDriver extends AbstractDriver<Athena, Athena.Types.Cl
   queries = queries;
 
   private readonly schema = 'AwsDataCatalog';
-  private readonly cache = new DriverObjectCache();
+  private readonly cache = DriverObjectCache.getInstance();
 
   /**
    * If you driver depends on node packages, list it below on `deps` prop.
@@ -256,6 +256,8 @@ export default class AthenaDriver extends AbstractDriver<Athena, Athena.Types.Cl
    * This method is a helper for intellisense and quick picks.
    */
   public async searchItems(itemType: ContextValue, search: any, _extraParams: any = {}): Promise<NSDatabase.SearchableItem[]> {
+    console.log(search);
+    
     switch (itemType) {
       case ContextValue.DATABASE:
         {
